@@ -21,7 +21,7 @@ from great_expectations.cli.util import (
     cli_message_dict,
     verify_library_dependent_modules,
 )
-from great_expectations.core import ExpectationSuite
+from great_expectations.core.expectation_suite import ExpectationSuite
 from great_expectations.core.usage_statistics.usage_statistics import send_usage_message
 from great_expectations.data_context.types.base import DatasourceConfigSchema
 from great_expectations.datasource import (
@@ -39,7 +39,7 @@ from great_expectations.exceptions import (
     BatchKwargsError,
     DatasourceInitializationError,
 )
-from great_expectations.validator.validator import Validator
+from great_expectations.validator.validator import BridgeValidator
 
 logger = logging.getLogger(__name__)
 
@@ -592,8 +592,8 @@ After you connect to the datasource, run great_expectations init to continue.
 
 def _should_hide_input():
     """
-        This is a workaround to help identify Windows and adjust the prompts accordingly
-        since hidden prompts may freeze in certain Windows terminals
+    This is a workaround to help identify Windows and adjust the prompts accordingly
+    since hidden prompts may freeze in certain Windows terminals
     """
     if "windows" in platform.platform().lower():
         return False
@@ -732,7 +732,8 @@ def _collect_snowflake_credentials_key_pair():
     credentials = {}
 
     credentials["private_key_path"] = click.prompt(
-        "Path to the private key used for authentication", show_default=False,
+        "Path to the private key used for authentication",
+        show_default=False,
     )
 
     credentials["private_key_passphrase"] = click.prompt(
@@ -1154,7 +1155,9 @@ We could not determine the format of the file. What is it?
         # do not use Click to check if the file exists - the get_batch
         # logic will check this
         path = click.prompt(
-            msg_prompt_file_path, type=click.Path(dir_okay=dir_okay), default=path,
+            msg_prompt_file_path,
+            type=click.Path(dir_okay=dir_okay),
+            default=path,
         )
 
         if not path.startswith("gs:") and not path.startswith("s3"):
@@ -1298,25 +1301,46 @@ def _get_batch_kwargs_for_sqlalchemy_datasource(
             "bigquery_temp_table": bigquery_temp_table,
         }
 
-    try:
-        if sql_query is None:
-            batch_kwargs = temp_generator.build_batch_kwargs(
-                data_asset_name, **additional_batch_kwargs
-            )
-            batch_kwargs.update(temp_table_kwargs)
-        else:
-            batch_kwargs = {"query": sql_query, "datasource": datasource_name}
-            batch_kwargs.update(temp_table_kwargs)
+    while True:
+        try:
+            query = None
 
-            Validator(
-                batch=datasource.get_batch(batch_kwargs),
-                expectation_suite=ExpectationSuite("throwaway"),
-            ).get_dataset()
+            if len(available_data_asset_names) > 0:
+                selection = click.prompt(prompt, show_default=False)
 
-    except ge_exceptions.GreatExpectationsError as error:
-        cli_message("""<red>ERROR: {}</red>""".format(str(error)))
-    except KeyError as error:
-        cli_message("""<red>ERROR: {}</red>""".format(str(error)))
+                selection = selection.strip()
+                try:
+                    data_asset_index = int(selection) - 1
+                    try:
+                        data_asset_name = [
+                            name[0] for name in available_data_asset_names
+                        ][data_asset_index]
+                    except IndexError:
+                        pass
+                except ValueError:
+                    query = selection
+
+            else:
+                query = click.prompt(msg_prompt_query, show_default=False)
+
+            if query is None:
+                batch_kwargs = temp_generator.build_batch_kwargs(
+                    data_asset_name, **additional_batch_kwargs
+                )
+                batch_kwargs.update(temp_table_kwargs)
+            else:
+                batch_kwargs = {"query": query, "datasource": datasource_name}
+                batch_kwargs.update(temp_table_kwargs)
+                BridgeValidator(
+                    batch=datasource.get_batch(batch_kwargs),
+                    expectation_suite=ExpectationSuite("throwaway"),
+                ).get_dataset()
+
+            break
+        except ge_exceptions.GreatExpectationsError as error:
+            cli_message("""<red>ERROR: {}</red>""".format(str(error)))
+        except KeyError as error:
+            cli_message("""<red>ERROR: {}</red>""".format(str(error)))
 
     batch_kwargs["data_asset_name"] = data_asset_name
 
